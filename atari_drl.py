@@ -1,6 +1,6 @@
 import sys
 import math
-import pickle
+import threading
 
 import json
 import matplotlib.pyplot as plt
@@ -16,12 +16,26 @@ from keras.models import model_from_json
 from keras.models import load_model
 from keras.models import Sequential
 from keras.layers.core import Dense
+from keras.layers import Conv1D, GlobalMaxPooling1D, Embedding, Flatten
 from keras.optimizers import sgd
+from keras.utils import plot_model
 
-from tensorflow.python.client import device_lib
-print(device_lib.list_local_devices())
+#from tensorflow.python.client import device_lib
+#print(device_lib.list_local_devices())
 
 import gym, gym.spaces
+
+from gym.envs.registration import registry, register, make, spec
+
+import memory
+
+register(
+    id='Custom-Atari-v0',
+    entry_point = 'atari_env:AtariEnv',
+    kwargs={'game': 'breakout', 'obs_type': 'ram', 'repeat_action_probability': 0.25 },
+    max_episode_steps=10000,
+    nondeterministic=False
+)
 
 def get_timestamp():
     return time.strftime("%d-%m-%y_%H:%M:%S")
@@ -39,13 +53,13 @@ EXPERIENCE_FILE = "experience" + get_timestamp()
 
 seaborn.set()
 
-env = gym.make('Breakout-ram-v0')
+env = gym.make('Custom-Atari-v0')
 
 env.reset()
 
 last_frame_time = 0
-ada_divisor = 500 #number of epochs befor epsilon begains to decrease?
-min_epsilon = 0.1
+ada_divisor = 5 #number of epochs befor epsilon begains to decrease?
+min_epsilon = 0.01
 
 # I dont know if this works
 def set_max_fps(last_frame_time,FPS = 1):
@@ -70,8 +84,7 @@ class ExperienceReplay(object):
         self.discount = discount
     
     def remember(self, states, done):
-        self.memory.append([states, done])
-
+        self.memory.append([states, done])       
         if len(self.memory) > self.max_memory:
             del self.memory[0]
     
@@ -106,15 +119,31 @@ class ExperienceReplay(object):
 
         return inputs, targets
 
+
+kernel_size = 10
+batch_size = 1
+max_features = 256
+embedding_dims = 2
+
+
 def baseline_model(obs_size, num_action, hidden_size1, hidden_size2, hidden_size3, hidden_size4, hidden_size5, hidden_size6):
 
     model = Sequential()
     model.add(Dense(hidden_size1, input_shape=(obs_size,), activation='relu'))
-    model.add(Dense(hidden_size1, activation='relu'))
+    #model.add(Embedding(max_features, embedding_dims, input_length=obs_size))    
+
+    #model.add(Conv1D(filters=10,kernel_size=kernel_size, activation='relu'))
+    #model.add(Conv1D(filters=hidden_size1,kernel_size=kernel_size, activation='relu'))
+
+    #model.add(GlobalMaxPooling1D())
+    #model.add(Flatten())
     model.add(Dense(hidden_size2, activation='relu'))
-    #model.add(Dense(hidden_size3, activation='relu'))
-    model.add(Dense(hidden_size4, activation='relu'))
-    #model.add(Dense(hidden_size5, activation='relu'))
+    model.add(Dense(hidden_size1, activation='relu'))
+    model.add(Dense(hidden_size1, activation='relu'))
+    model.add(Dense(hidden_size1, activation='relu'))
+    model.add(Dense(hidden_size1, activation='relu'))    
+    model.add(Dense(hidden_size2, activation='relu'))
+    
     model.add(Dense(hidden_size6, activation='relu'))
     model.add(Dense(num_actions))
     model.compile(sgd(lr=.0000001), "mse")
@@ -123,25 +152,26 @@ def baseline_model(obs_size, num_action, hidden_size1, hidden_size2, hidden_size
 
 #hyper parameters
 #epsilon = .9
-discount = 0.9
+discount = 0.99
 num_actions = env.action_space.n # one dimensional action space
-max_memory = 500
-hidden_size1 = 128
-hidden_size2 = 256
-hidden_size3 = 512
+max_memory = 100
+hidden_size1 = 256
+hidden_size2 = 128
+hidden_size3 = 1028
 hidden_size4 = 256
 hidden_size5 = 128
 hidden_size6 = 16
 
-batch_size = 1
+
 obs_size = len(env.observation_space.sample())
 
 model = None
 testing = False
 
-print(sys.argv)
+num_lives = 5
 
 exp_replay = ExperienceReplay(max_memory=max_memory, discount=discount)
+#exp_replay = memory.Memory(max_memory=max_memory, discount=discount)
 
 if len(sys.argv) > 2:
     if sys.argv[1].strip() == "load":
@@ -156,30 +186,45 @@ else:
 
 model.summary()
 
-
+MAX_OBS_VAL = 256
 
 def test(model):
 
     c = 0
-    input_t = np.array([env.reset()])
+    input_t = np.array([env.reset()])/MAX_OBS_VAL
     points = 0
     done = False    
     while not done and c <= 1000:
         input_tm1 = input_t
-        q = model.predict(input_tm1)        
-        action = np.argmax(q[0])        
+        #if np.random.rand() <= 0.1:
+        #    action = env.action_space.sample()
+        #else:        
+        q = model.predict(input_tm1)
+        print(q)       
+        action = np.argmax(q[0])
         obs, reward, done, _ = env.step(action)
-        input_t = np.array([obs])
+        input_t = np.array([obs])/MAX_OBS_VAL
         points += reward
         env.render()
         c += 1
     return points
            
+render = False
+
+def check_input():
+    while 1:
+        global render        
+        in_put = input()
+        if (in_put == "render"):
+            render = True
+        else:
+            render = False
+
 
 
 def train(model, epochs, verbose = 1, disp_every = 100):
     win_cnt = 0
-
+    global render
     win_hist = []
 
     loss_log    = np.zeros(epochs)
@@ -189,7 +234,7 @@ def train(model, epochs, verbose = 1, disp_every = 100):
     for e in range(epochs):
         loss = 0.
 
-        input_t = np.array([env.reset()])
+        input_t = np.array([env.reset()])/MAX_OBS_VAL
        
         done = False
         
@@ -199,10 +244,14 @@ def train(model, epochs, verbose = 1, disp_every = 100):
 
         file_name_id_str = get_timestamp()
 
+        last_lives = num_lives
+
         while not done:
             input_tm1 = input_t
 
             # Sprinkle in some exploration
+
+            #print(input_tm1)
 
             if np.random.rand() <= epsilon:
                 action = env.action_space.sample()
@@ -210,11 +259,21 @@ def train(model, epochs, verbose = 1, disp_every = 100):
                 q = model.predict(input_tm1)
                 action = np.argmax(q[0])
             
-            obs, reward, done, _ = env.step(action)
+            obs, reward, done, info = env.step(action)
+
+            #l = info['ale.lives']
+            #if (l < last_lives):
+            #    reward -= (last_lives - l)
+            #    last_lives = l
+            #else:
+            #    reward += 1
+            # cost of taking an action
+            reward -= 0.01
+
 
             rwd += reward
 
-            input_t = np.array([obs])
+            input_t = np.array([obs])/MAX_OBS_VAL
 
             # don't need this
             # 20 is arbritrary
@@ -222,13 +281,21 @@ def train(model, epochs, verbose = 1, disp_every = 100):
                 win_cnt += 1
             
             # Comment to speed up
-            #env.render()
-
+            if render:                
+                env.render()
+            
+            
             exp_replay.remember([input_tm1, action, reward, input_t], done)
 
             inputs, targets = exp_replay.get_batch(model, batch_size=batch_size)
 
-            batch_loss = model.train_on_batch(inputs, targets)
+            input_nn = input_tm1
+            target =  np.array([reward] * 4) + discount * model.predict(input_t)
+
+            #print("NN INPUT: " + str(inputs))
+            #print("NN target: " + str(targets))
+            #batch_loss = model.train_on_batch(inputs, targets)
+            batch_loss = model.train_on_batch(input_nn,target)
 
             loss += batch_loss
         
@@ -244,9 +311,11 @@ def train(model, epochs, verbose = 1, disp_every = 100):
             np.savetxt(RWD_LOG_FILE, rwd_log, delimiter=",")        
             np.savetxt(EPSILON_LOG_FILE, epsilon_log, delimiter=",")
             #pickle.dump(exp_replay, EXPERIENCE_FILE)
+            plot_model(model, to_file='model.png')
 
         if verbose > 0:
             print("Epoch {:03d}/{:03d} | Loss {:.4f} | Reward {} | Epsilon {}".format(e + 1, epochs, loss, rwd, epsilon))
+           
         win_hist.append(win_cnt)
     return win_hist
 
@@ -254,14 +323,24 @@ epoch = 5000 * 8
 
 
 if not testing:
+    t = threading.Thread(target=check_input)
+    t.start()  
     hist = train(model, epoch, verbose=1)
     print ("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~TRANING DONE~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     model.save("model_final" +  get_timestamp())
 
 print("showing model")
+
+
 best_reward = 0
+num_runs = 0
+total_reward = 0
 while 1:
+    num_runs += 1
     rwd = test(model)
+    total_reward += rwd
+    if num_runs % 100:
+        print("Avrage reward: " + str(total_reward/num_runs))
     if rwd > best_reward:
         print("New best reward: " + str(rwd))
         best_reward = rwd    

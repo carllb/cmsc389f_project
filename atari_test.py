@@ -7,8 +7,8 @@ done = False
 
 while not done:
     action = env.action_space.sample()
-    print (action)
-    observation, reward, done, info = env.step(action)
     
+    observation, reward, done, info = env.step(4)
+    print (observation)
     env.render()
     time.sleep(1.0/30)
