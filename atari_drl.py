@@ -1,5 +1,6 @@
 import sys
 import math
+import pickle
 
 import json
 import matplotlib.pyplot as plt
@@ -17,16 +18,24 @@ from keras.models import Sequential
 from keras.layers.core import Dense
 from keras.optimizers import sgd
 
-import tensorflow as tf
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
 
 import gym, gym.spaces
 
 def get_timestamp():
     return time.strftime("%d-%m-%y_%H:%M:%S")
 
+seed = int(time.clock_gettime(time.CLOCK_REALTIME))
+print("Seed: " + str(seed))
+np.random.seed(seed)
+
 LOSS_LOG_FILE = "loss" + get_timestamp() + ".csv"
 RWD_LOG_FILE = "reward" + get_timestamp() + ".csv"
 EPSILON_LOG_FILE = "epsilon" + get_timestamp() + ".csv"
+EXPERIENCE_FILE = "experience" + get_timestamp()
+
+
 
 seaborn.set()
 
@@ -34,9 +43,8 @@ env = gym.make('Breakout-ram-v0')
 
 env.reset()
 
-
 last_frame_time = 0
-ada_divisor = 100
+ada_divisor = 500 #number of epochs befor epsilon begains to decrease?
 min_epsilon = 0.1
 
 # I dont know if this works
@@ -98,13 +106,18 @@ class ExperienceReplay(object):
 
         return inputs, targets
 
-def baseline_model(obs_size, num_action, hidden_size):
+def baseline_model(obs_size, num_action, hidden_size1, hidden_size2, hidden_size3, hidden_size4, hidden_size5, hidden_size6):
 
     model = Sequential()
-    model.add(Dense(hidden_size, input_shape=(obs_size,), activation='relu'))
-    model.add(Dense(hidden_size, activation='relu'))
+    model.add(Dense(hidden_size1, input_shape=(obs_size,), activation='relu'))
+    model.add(Dense(hidden_size1, activation='relu'))
+    model.add(Dense(hidden_size2, activation='relu'))
+    #model.add(Dense(hidden_size3, activation='relu'))
+    model.add(Dense(hidden_size4, activation='relu'))
+    #model.add(Dense(hidden_size5, activation='relu'))
+    model.add(Dense(hidden_size6, activation='relu'))
     model.add(Dense(num_actions))
-    model.compile(sgd(lr=.000001), "mse")
+    model.compile(sgd(lr=.0000001), "mse")
     return model
 
 
@@ -113,7 +126,13 @@ def baseline_model(obs_size, num_action, hidden_size):
 discount = 0.9
 num_actions = env.action_space.n # one dimensional action space
 max_memory = 500
-hidden_size = 100
+hidden_size1 = 128
+hidden_size2 = 256
+hidden_size3 = 512
+hidden_size4 = 256
+hidden_size5 = 128
+hidden_size6 = 16
+
 batch_size = 1
 obs_size = len(env.observation_space.sample())
 
@@ -122,18 +141,21 @@ testing = False
 
 print(sys.argv)
 
+exp_replay = ExperienceReplay(max_memory=max_memory, discount=discount)
+
 if len(sys.argv) > 2:
     if sys.argv[1].strip() == "load":
         model = load_model(sys.argv[2])
+        #if len(sys.argv) > 3:
+            #exp_replay = pickle.load(sys.argv[3])
     elif sys.argv[1].strip() == "test":
         testing = True
         model = load_model(sys.argv[2])
 else:
-    model = baseline_model(obs_size, num_actions, hidden_size)
+    model = baseline_model(obs_size, num_actions, hidden_size1, hidden_size2, hidden_size3, hidden_size4, hidden_size5, hidden_size6)
 
 model.summary()
 
-exp_replay = ExperienceReplay(max_memory=max_memory, discount=discount)
 
 
 def test(model):
@@ -144,9 +166,8 @@ def test(model):
     done = False    
     while not done and c <= 1000:
         input_tm1 = input_t
-        q = model.predict(input_tm1)
-        action = np.argmax(q[0])
-
+        q = model.predict(input_tm1)        
+        action = np.argmax(q[0])        
         obs, reward, done, _ = env.step(action)
         input_t = np.array([obs])
         points += reward
@@ -218,18 +239,18 @@ def train(model, epochs, verbose = 1, disp_every = 100):
        
         if (e + 1) % disp_every == 0:
             #test(model)
-            model.save("model" +  file_name_id_str  + str(e))
+            model.save("model" +  file_name_id_str  + "~" +str(e + 1))
             np.savetxt(LOSS_LOG_FILE, loss_log, delimiter=",")
             np.savetxt(RWD_LOG_FILE, rwd_log, delimiter=",")        
             np.savetxt(EPSILON_LOG_FILE, epsilon_log, delimiter=",")
+            #pickle.dump(exp_replay, EXPERIENCE_FILE)
 
         if verbose > 0:
-            print("Epoch {:03d}/{:03d} | Loss {:.4f} | Reward {} | Epsilon {}".format(e,epochs, loss, rwd, epsilon))
+            print("Epoch {:03d}/{:03d} | Loss {:.4f} | Reward {} | Epsilon {}".format(e + 1, epochs, loss, rwd, epsilon))
         win_hist.append(win_cnt)
     return win_hist
 
-epoch = 5000
-
+epoch = 5000 * 8
 
 
 if not testing:
