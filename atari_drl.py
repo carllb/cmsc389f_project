@@ -1,4 +1,5 @@
 import sys
+import math
 
 import json
 import matplotlib.pyplot as plt
@@ -20,6 +21,12 @@ import tensorflow as tf
 
 import gym, gym.spaces
 
+def get_timestamp():
+    return time.strftime("%d-%m-%y_%H:%M:%S")
+
+LOSS_LOG_FILE = "loss" + get_timestamp() + ".csv"
+RWD_LOG_FILE = "reward" + get_timestamp() + ".csv"
+EPSILON_LOG_FILE = "epsilon" + get_timestamp() + ".csv"
 
 seaborn.set()
 
@@ -27,10 +34,10 @@ env = gym.make('Breakout-ram-v0')
 
 env.reset()
 
-# Lets see if we need these
 
 last_frame_time = 0
-
+ada_divisor = 100
+min_epsilon = 0.1
 
 # I dont know if this works
 def set_max_fps(last_frame_time,FPS = 1):
@@ -39,6 +46,9 @@ def set_max_fps(last_frame_time,FPS = 1):
     if sleep_time > 0:       
         time.sleep(sleep_time)
     return current_milli_time()
+
+def get_epsilon(t):
+    return max(min_epsilon, min(1, 1.0 - math.log10((t + 1) / ada_divisor)))
 
 
 class ExperienceReplay(object):
@@ -99,7 +109,7 @@ def baseline_model(obs_size, num_action, hidden_size):
 
 
 #hyper parameters
-epsilon = .9
+#epsilon = .9
 discount = 0.9
 num_actions = env.action_space.n # one dimensional action space
 max_memory = 500
@@ -151,6 +161,10 @@ def train(model, epochs, verbose = 1, disp_every = 100):
 
     win_hist = []
 
+    loss_log    = np.zeros(epochs)
+    rwd_log     = np.zeros(epochs)
+    epsilon_log = np.zeros(epochs)
+
     for e in range(epochs):
         loss = 0.
 
@@ -158,6 +172,12 @@ def train(model, epochs, verbose = 1, disp_every = 100):
        
         done = False
         
+        epsilon = get_epsilon(e)
+
+        rwd = 0
+
+        file_name_id_str = get_timestamp()
+
         while not done:
             input_tm1 = input_t
 
@@ -171,9 +191,13 @@ def train(model, epochs, verbose = 1, disp_every = 100):
             
             obs, reward, done, _ = env.step(action)
 
+            rwd += reward
+
             input_t = np.array([obs])
 
-            if reward == 1:
+            # don't need this
+            # 20 is arbritrary
+            if reward == 20:
                 win_cnt += 1
             
             # Comment to speed up
@@ -187,12 +211,20 @@ def train(model, epochs, verbose = 1, disp_every = 100):
 
             loss += batch_loss
         
-        if e % disp_every == 0:
+        loss_log[e] = loss
+        rwd_log[e] = rwd
+        epsilon_log[e] = epsilon
+       
+       
+        if (e + 1) % disp_every == 0:
             #test(model)
-            model.save("model" + str(e))
-        
+            model.save("model" +  file_name_id_str  + str(e))
+            np.savetxt(LOSS_LOG_FILE, loss_log, delimiter=",")
+            np.savetxt(RWD_LOG_FILE, rwd_log, delimiter=",")        
+            np.savetxt(EPSILON_LOG_FILE, epsilon_log, delimiter=",")
+
         if verbose > 0:
-            print("Epoch {:03d}/{:03d} | Loss {:.4f} | Win count {}".format(e,epochs, loss, win_cnt))
+            print("Epoch {:03d}/{:03d} | Loss {:.4f} | Reward {} | Epsilon {}".format(e,epochs, loss, rwd, epsilon))
         win_hist.append(win_cnt)
     return win_hist
 
@@ -203,9 +235,13 @@ epoch = 5000
 if not testing:
     hist = train(model, epoch, verbose=1)
     print ("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~TRANING DONE~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    model.save("model_final" + str(time.clock))
+    model.save("model_final" +  get_timestamp())
 
 print("showing model")
+best_reward = 0
 while 1:
-    print("Reward: " + str(test(model)))
+    rwd = test(model)
+    if rwd > best_reward:
+        print("New best reward: " + str(rwd))
+        best_reward = rwd    
 
